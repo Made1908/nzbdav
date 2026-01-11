@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using NzbWebDAV.Clients.Usenet.Concurrency;
 using NzbWebDAV.Clients.Usenet.Contexts;
+using Serilog;
 
 namespace NzbWebDAV.Clients.Usenet.Connections;
 
@@ -31,6 +32,8 @@ public sealed class ConnectionPool<T> : IDisposable, IAsyncDisposable
     public event EventHandler<ConnectionPoolStats.ConnectionPoolChangedEventArgs>? OnConnectionPoolChanged;
 
     private readonly Func<CancellationToken, ValueTask<T>> _factory;
+    private readonly Func<T, CancellationToken, ValueTask<bool>>? _connectionValidator;
+    private readonly TimeSpan _validationThreshold;
     private readonly int _maxConnections;
 
     /* --------------------------------- state --------------------------------------- */
@@ -48,6 +51,8 @@ public sealed class ConnectionPool<T> : IDisposable, IAsyncDisposable
     public ConnectionPool(
         int maxConnections,
         Func<CancellationToken, ValueTask<T>> connectionFactory,
+        Func<T, CancellationToken, ValueTask<bool>>? connectionValidator = null,
+        TimeSpan? validationThreshold = null,
         TimeSpan? idleTimeout = null)
     {
         if (maxConnections <= 0)
@@ -55,6 +60,8 @@ public sealed class ConnectionPool<T> : IDisposable, IAsyncDisposable
 
         _factory = connectionFactory
                    ?? throw new ArgumentNullException(nameof(connectionFactory));
+        _connectionValidator = connectionValidator;
+        _validationThreshold = validationThreshold ?? TimeSpan.FromSeconds(10);
         IdleTimeout = idleTimeout ?? TimeSpan.FromSeconds(30);
 
         _maxConnections = maxConnections;
@@ -93,6 +100,35 @@ public sealed class ConnectionPool<T> : IDisposable, IAsyncDisposable
         {
             if (!item.IsExpired(IdleTimeout))
             {
+                // Validate connection if it's been idle longer than the validation threshold
+                if (_connectionValidator is not null)
+                {
+                    var idleMs = item.GetIdleMilliseconds();
+                    if (idleMs >= _validationThreshold.TotalMilliseconds)
+                    {
+                        try
+                        {
+                            var isValid = await _connectionValidator(item.Connection, linked.Token).ConfigureAwait(false);
+                            if (!isValid)
+                            {
+                                Log.Debug("Connection idle for {IdleMs}ms failed validation, disposing", idleMs);
+                                DisposeConnection(item.Connection);
+                                Interlocked.Decrement(ref _live);
+                                TriggerConnectionPoolChangedEvent();
+                                continue;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Debug(ex, "Connection idle for {IdleMs}ms threw during validation, disposing", idleMs);
+                            DisposeConnection(item.Connection);
+                            Interlocked.Decrement(ref _live);
+                            TriggerConnectionPoolChangedEvent();
+                            continue;
+                        }
+                    }
+                }
+
                 TriggerConnectionPoolChangedEvent();
                 return BuildLock(item.Connection);
             }
@@ -135,6 +171,13 @@ public sealed class ConnectionPool<T> : IDisposable, IAsyncDisposable
         {
             if (nowMillis == 0) nowMillis = Environment.TickCount64;
             return unchecked(nowMillis - LastTouchedMillis) >= idle.TotalMilliseconds;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public long GetIdleMilliseconds(long nowMillis = 0)
+        {
+            if (nowMillis == 0) nowMillis = Environment.TickCount64;
+            return unchecked(nowMillis - LastTouchedMillis);
         }
     }
 

@@ -52,7 +52,15 @@ public class MultiConnectionNntpClient(ConnectionPool<INntpClient> connectionPoo
     {
         const SemaphorePriority priority = SemaphorePriority.High;
         var connectionLock = await connectionPool.GetConnectionLockAsync(priority, ct).ConfigureAwait(false);
-        return await connectionLock.Connection.DecodedBodyAsync(segmentId, OnDone, ct).ConfigureAwait(false);
+        try
+        {
+            return await connectionLock.Connection.DecodedBodyAsync(segmentId, OnDone, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            connectionLock.Dispose();
+            throw;
+        }
 
         void OnDone(ArticleBodyResult articleBodyResult)
         {
@@ -68,7 +76,15 @@ public class MultiConnectionNntpClient(ConnectionPool<INntpClient> connectionPoo
     {
         const SemaphorePriority priority = SemaphorePriority.High;
         var connectionLock = await connectionPool.GetConnectionLockAsync(priority, ct).ConfigureAwait(false);
-        return await connectionLock.Connection.DecodedArticleAsync(segmentId, OnDone, ct).ConfigureAwait(false);
+        try
+        {
+            return await connectionLock.Connection.DecodedArticleAsync(segmentId, OnDone, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            connectionLock.Dispose();
+            throw;
+        }
 
         void OnDone(ArticleBodyResult articleBodyResult)
         {
@@ -92,7 +108,15 @@ public class MultiConnectionNntpClient(ConnectionPool<INntpClient> connectionPoo
     {
         const SemaphorePriority priority = SemaphorePriority.High;
         var connectionLock = await connectionPool.GetConnectionLockAsync(priority, ct).ConfigureAwait(false);
-        return await connectionLock.Connection.DecodedBodyAsync(segmentId, OnDone, ct).ConfigureAwait(false);
+        try
+        {
+            return await connectionLock.Connection.DecodedBodyAsync(segmentId, OnDone, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            connectionLock.Dispose();
+            throw;
+        }
 
         void OnDone(ArticleBodyResult articleBodyResult)
         {
@@ -110,7 +134,15 @@ public class MultiConnectionNntpClient(ConnectionPool<INntpClient> connectionPoo
     {
         const SemaphorePriority priority = SemaphorePriority.High;
         var connectionLock = await connectionPool.GetConnectionLockAsync(priority, ct).ConfigureAwait(false);
-        return await connectionLock.Connection.DecodedArticleAsync(segmentId, OnDone, ct).ConfigureAwait(false);
+        try
+        {
+            return await connectionLock.Connection.DecodedArticleAsync(segmentId, OnDone, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            connectionLock.Dispose();
+            throw;
+        }
 
         void OnDone(ArticleBodyResult articleBodyResult)
         {

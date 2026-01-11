@@ -1,4 +1,5 @@
-﻿using NzbWebDAV.Clients.Usenet.Connections;
+﻿using Microsoft.Extensions.Logging;
+using NzbWebDAV.Clients.Usenet.Connections;
 using NzbWebDAV.Config;
 using NzbWebDAV.Websocket;
 
@@ -6,8 +7,8 @@ namespace NzbWebDAV.Clients.Usenet;
 
 public class UsenetStreamingClient : WrappingNntpClient
 {
-    public UsenetStreamingClient(ConfigManager configManager, WebsocketManager websocketManager)
-        : base(CreateDownloadingNntpClient(configManager, websocketManager))
+    public UsenetStreamingClient(ConfigManager configManager, WebsocketManager websocketManager, ILoggerFactory loggerFactory)
+        : base(CreateDownloadingNntpClient(configManager, websocketManager, loggerFactory))
     {
         // when config changes, create a new MultiProviderClient to use instead.
         configManager.OnConfigChanged += (_, configEventArgs) =>
@@ -16,7 +17,7 @@ public class UsenetStreamingClient : WrappingNntpClient
             if (!configEventArgs.ChangedConfig.ContainsKey("usenet.providers")) return;
 
             // update the connection-pool according to the new config
-            var newUsenetClient = CreateDownloadingNntpClient(configManager, websocketManager);
+            var newUsenetClient = CreateDownloadingNntpClient(configManager, websocketManager, loggerFactory);
             ReplaceUnderlyingClient(newUsenetClient);
         };
     }
@@ -24,11 +25,13 @@ public class UsenetStreamingClient : WrappingNntpClient
     private static DownloadingNntpClient CreateDownloadingNntpClient
     (
         ConfigManager configManager,
-        WebsocketManager websocketManager
+        WebsocketManager websocketManager,
+        ILoggerFactory loggerFactory
     )
     {
         var multiProviderClient = CreateMultiProviderClient(configManager, websocketManager);
-        return new DownloadingNntpClient(multiProviderClient, configManager);
+        var logger = loggerFactory.CreateLogger<DownloadingNntpClient>();
+        return new DownloadingNntpClient(multiProviderClient, configManager, logger);
     }
 
     private static MultiProviderNntpClient CreateMultiProviderClient
@@ -69,11 +72,31 @@ public class UsenetStreamingClient : WrappingNntpClient
         EventHandler<ConnectionPoolStats.ConnectionPoolChangedEventArgs> onConnectionPoolChanged
     )
     {
-        var connectionPool = new ConnectionPool<INntpClient>(maxConnections, connectionFactory);
+        var connectionPool = new ConnectionPool<INntpClient>(
+            maxConnections,
+            connectionFactory,
+            connectionValidator: ValidateConnectionAsync
+        );
         connectionPool.OnConnectionPoolChanged += onConnectionPoolChanged;
         var args = new ConnectionPoolStats.ConnectionPoolChangedEventArgs(0, 0, maxConnections);
         onConnectionPoolChanged(connectionPool, args);
         return connectionPool;
+    }
+
+    /// <summary>
+    /// Validates that a pooled NNTP connection is still alive by sending a DATE command.
+    /// </summary>
+    private static async ValueTask<bool> ValidateConnectionAsync(INntpClient client, CancellationToken ct)
+    {
+        try
+        {
+            await client.DateAsync(ct).ConfigureAwait(false);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     public static async ValueTask<INntpClient> CreateNewConnection

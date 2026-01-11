@@ -1,4 +1,5 @@
-﻿using NzbWebDAV.Clients.Usenet.Concurrency;
+﻿using Microsoft.Extensions.Logging;
+using NzbWebDAV.Clients.Usenet.Concurrency;
 using NzbWebDAV.Clients.Usenet.Contexts;
 using NzbWebDAV.Clients.Usenet.Models;
 using NzbWebDAV.Config;
@@ -16,12 +17,14 @@ public class DownloadingNntpClient : WrappingNntpClient
 {
     private readonly ConfigManager _configManager;
     private readonly PrioritizedSemaphore _semaphore;
+    private readonly ILogger<DownloadingNntpClient> _logger;
 
-    public DownloadingNntpClient(INntpClient usenetClient, ConfigManager configManager) : base(usenetClient)
+    public DownloadingNntpClient(INntpClient usenetClient, ConfigManager configManager, ILogger<DownloadingNntpClient> logger) : base(usenetClient)
     {
         var maxDownloadConnections = configManager.GetMaxDownloadConnections();
         var streamingPriority = configManager.GetStreamingPriority();
         _configManager = configManager;
+        _logger = logger;
         _semaphore = new PrioritizedSemaphore(maxDownloadConnections, maxDownloadConnections, streamingPriority);
         configManager.OnConfigChanged += OnConfigChanged;
     }
@@ -57,7 +60,17 @@ public class DownloadingNntpClient : WrappingNntpClient
         Action<ArticleBodyResult>? onConnectionReadyAgain, CancellationToken cancellationToken)
     {
         await AcquireExclusiveConnectionAsync(onConnectionReadyAgain, cancellationToken).ConfigureAwait(false);
-        return await base.DecodedBodyAsync(segmentId, OnConnectionReadyAgain, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await base.DecodedBodyAsync(segmentId, OnConnectionReadyAgain, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Releasing connection due to error during DecodedBodyAsync for segment {SegmentId}", segmentId);
+            _semaphore.Release();
+            onConnectionReadyAgain?.Invoke(ArticleBodyResult.NotRetrieved);
+            throw;
+        }
 
         void OnConnectionReadyAgain(ArticleBodyResult articleBodyResult)
         {
@@ -70,8 +83,18 @@ public class DownloadingNntpClient : WrappingNntpClient
         Action<ArticleBodyResult>? onConnectionReadyAgain, CancellationToken cancellationToken)
     {
         await AcquireExclusiveConnectionAsync(onConnectionReadyAgain, cancellationToken).ConfigureAwait(false);
-        return await base.DecodedArticleAsync(segmentId, OnConnectionReadyAgain, cancellationToken)
-            .ConfigureAwait(false);
+        try
+        {
+            return await base.DecodedArticleAsync(segmentId, OnConnectionReadyAgain, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Releasing connection due to error during DecodedArticleAsync for segment {SegmentId}", segmentId);
+            _semaphore.Release();
+            onConnectionReadyAgain?.Invoke(ArticleBodyResult.NotRetrieved);
+            throw;
+        }
 
         void OnConnectionReadyAgain(ArticleBodyResult articleBodyResult)
         {
